@@ -282,6 +282,51 @@ module unknown_wide_direct (
   end
 endmodule
 
+module unknown_if_default (
+    input logic clk
+);
+  typedef enum logic [2:0] { S0, S1, S2 } state_t;
+  state_t state_q;
+  state_t state_d;
+  always_comb begin
+    if (state_q == S0) state_d = S1;
+    else if (state_q == S1) state_d = S2;
+    else state_d = state_t'(7);
+  end
+  always_ff @(posedge clk) state_q <= state_d;
+endmodule
+
+module unknown_if_default_cond #(
+    parameter bit BAD_THEN = 0
+) (
+    input logic clk,
+    input logic sel
+);
+  typedef enum logic [2:0] { S0, S1, S2 } state_t;
+  state_t state_q;
+  state_t state_d;
+  always_comb begin
+    if (state_q == S0) state_d = S1;
+    else if (state_q == S1) state_d = S2;
+    else begin
+      // Keep the conditional target as an expression.
+      // verilator coverage_off
+      if (BAD_THEN) state_d = sel ? state_t'(7) : S0;
+      else state_d = sel ? S0 : state_t'(7);
+      // verilator coverage_on
+    end
+  end
+  always_ff @(posedge clk) state_q <= state_d;
+endmodule
+
+module t_default;
+  logic clk;
+  logic sel;
+  unknown_if_default unknown_if_default_u (.clk);
+  unknown_if_default_cond #(.BAD_THEN(1)) unknown_if_default_then_u (.clk, .sel);
+  unknown_if_default_cond unknown_if_default_else_u (.clk, .sel);
+endmodule
+
 module t;
   logic clk;
   unknown_then unknown_then_u (.clk(clk));

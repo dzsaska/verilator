@@ -523,6 +523,16 @@ class FsmDetectVisitor final : public VNVisitor {
         return dtypep->skipRefToEnump();
     }
 
+    static AstEnumDType* stateEnumDTypep(AstVarScope* stateVscp) {
+        if (AstEnumDType* const enump
+            = VN_CAST(unwrapEnumCandidate(stateVscp->dtypep()), EnumDType)) {
+            return enump;
+        }
+        // this lookup is redundant. Copying it anyway to match the code from
+        // collectDeclaredStateSpace this copies
+        return VN_CAST(unwrapEnumCandidate(stateVscp->varp()->dtypep()), EnumDType);
+    }
+
     static string candidateConflictContext(AstNode* laterNodep,
                                            const FsmCaseCandidate& firstCand) {
         return '\n' + laterNodep->warnContextPrimary() + firstCand.warnNodep->warnOther()
@@ -655,18 +665,26 @@ class FsmDetectVisitor final : public VNVisitor {
         }
 
         std::vector<std::pair<AstIf*, AstNodeExpr*>>
-        oneBlockIfCandidates(AstAlways* alwaysp) const {
+        oneBlockIfCandidates(AstAlways* alwaysp, const FsmAliasMap& aliases) const {
             std::vector<std::pair<AstIf*, AstNodeExpr*>> candidates;
             AstNode* const stmtsp = skipLeadingIgnorableStmt(alwaysp->stmtsp());
             // Reset-else FSMs should behave like the existing case path: reset
             // information is metadata, not part of steady-state dispatch.
             if (AstIf* const firstIfp = VN_CAST(stmtsp, If)) {
-                if (AstIf* const chainp = VN_CAST(
-                        FsmDetectVisitor::skipLeadingIgnorableStmt(firstIfp->elsesp()), If)) {
-                    candidates.emplace_back(chainp,
-                                            FsmDetectVisitor::isSimpleResetCond(firstIfp->condp())
-                                                ? firstIfp->condp()
-                                                : nullptr);
+                FsmIfChainCandidate chain;
+                // A supported dispatch is one candidate, not a reset wrapper
+                // around another candidate starting at its first else-if.
+                const bool isDispatch = FsmDetectVisitor::collectIfChain(firstIfp, aliases, chain)
+                                        && FsmDetectVisitor::ifChainSupportedTransitionNode(
+                                            chain, chain.compareVscp, chain.compareVscp);
+                if (!isDispatch) {
+                    if (AstIf* const chainp = VN_CAST(
+                            FsmDetectVisitor::skipLeadingIgnorableStmt(firstIfp->elsesp()), If)) {
+                        candidates.emplace_back(
+                            chainp, FsmDetectVisitor::isSimpleResetCond(firstIfp->condp())
+                                        ? firstIfp->condp()
+                                        : nullptr);
+                    }
                 }
             }
             for (AstNode* nodep = stmtsp; nodep; nodep = nodep->nextp()) {
@@ -845,8 +863,8 @@ class FsmDetectVisitor final : public VNVisitor {
                 } else if (chain.compareVscp != reg.stateVscp()) {
                     continue;
                 }
-                AstNode* const warnNodep
-                    = FsmDetectVisitor::ifChainSupportedTransitionNode(chain, reg.nextVscp());
+                AstNode* const warnNodep = FsmDetectVisitor::ifChainSupportedTransitionNode(
+                    chain, reg.stateVscp(), reg.nextVscp());
                 if (!warnNodep) continue;
                 match.matchedp = &reg;
                 match.warnNodep = warnNodep;
@@ -1170,11 +1188,22 @@ class FsmDetectVisitor final : public VNVisitor {
         return nullptr;
     }
 
+    static AstNode* ifChainDefaultTransitionNode(const FsmIfChainCandidate& chain,
+                                                 AstVarScope* stateVscp, AstVarScope* assignVscp) {
+        if (!chain.defaultStmtsp || !stateEnumDTypep(stateVscp)) return nullptr;
+        // Do not infer a default target that later statements could overwrite.
+        return caseItemSupportedArcNodeLike(singleMeaningfulStmt(chain.defaultStmtsp), assignVscp);
+    }
+
     static AstNode* ifChainSupportedTransitionNode(const FsmIfChainCandidate& chain,
-                                                   AstVarScope* stateVscp) {
+                                                   AstVarScope* stateVscp,
+                                                   AstVarScope* assignVscp) {
+        if (chain.branches.size() < 2
+            && !ifChainDefaultTransitionNode(chain, stateVscp, assignVscp))
+            return nullptr;
         for (size_t i = 0; i < chain.branches.size(); ++i) {
             const FsmIfBranch& branch = chain.branches[i];
-            AstNode* const nodep = caseItemSupportedArcNodeLike(branch.stmtsp, stateVscp);
+            AstNode* const nodep = caseItemSupportedArcNodeLike(branch.stmtsp, assignVscp);
             if (!nodep) return nullptr;
         }
         return chain.branches.front().ifp;
@@ -1349,7 +1378,7 @@ class FsmDetectVisitor final : public VNVisitor {
             chain.defaultStmtsp = elseNodep;
             break;
         }
-        return chain.branches.size() >= 2;
+        return true;
     }
 
     // Enum-backed FSMs should only use values that were interned as known states.
@@ -1525,8 +1554,7 @@ class FsmDetectVisitor final : public VNVisitor {
     static bool collectDeclaredStateSpace(AstNode* warnNodep, AstVarScope* stateVscp,
                                           FsmStateSpace& stateSpace, bool& needsSourceValues) {
         AstVar* const stateVarp = stateVscp->varp();
-        AstEnumDType* enump = VN_CAST(unwrapEnumCandidate(stateVscp->dtypep()), EnumDType);
-        if (!enump) enump = VN_CAST(unwrapEnumCandidate(stateVarp->dtypep()), EnumDType);
+        AstEnumDType* const enump = stateEnumDTypep(stateVscp);
         const bool forced = stateVarp->attrFsmState();
         stateSpace.stateVarp = stateVarp;
 
@@ -1722,6 +1750,7 @@ class FsmDetectVisitor final : public VNVisitor {
 
     static void emitIfChainArcs(FsmGraph& graph, const FsmIfChainCandidate& chain,
                                 AstVarScope* stateVscp, const FsmStateSpace& stateSpace) {
+        std::unordered_map<FsmStateValue, bool, FsmStateValueHash> stateHasGuard;
         for (size_t i = 0; i < chain.branches.size(); ++i) {
             const FsmIfBranch& branch = chain.branches[i];
             // Invalid source labels mean the extracted graph would no longer
@@ -1730,6 +1759,19 @@ class FsmDetectVisitor final : public VNVisitor {
                 return;
             emitStmtArcsFrom(graph, branch.stmtsp, stateVscp, stateSpace, branch.fromValue, false,
                              branch.hasTopGuard);
+            stateHasGuard.emplace(branch.fromValue, branch.hasTopGuard);
+        }
+        if (AstNode* const defaultp
+            = ifChainDefaultTransitionNode(chain, graph.stateVarScopep(), stateVscp)) {
+            // When else includes a state assignment, create FSM arcs between
+            // any state that could drop into the else branch (exclude only
+            // unguarded state comparisons).
+            for (const std::pair<string, FsmStateValue>& state : stateSpace.states) {
+                const auto it = stateHasGuard.find(state.second);
+                if (it != stateHasGuard.end() && !it->second) continue;
+                emitStmtArcsFrom(graph, defaultp, stateVscp, stateSpace, state.second, false,
+                                 it != stateHasGuard.end());
+            }
         }
     }
 
@@ -1853,13 +1895,15 @@ class FsmDetectVisitor final : public VNVisitor {
         // Case dispatch is more explicit and pre-existing behavior depends on
         // it winning when both shapes are present.
         const std::vector<std::pair<AstIf*, AstNodeExpr*>> ifCandidates
-            = analyzer.oneBlockIfCandidates(alwaysp);
+            = analyzer.oneBlockIfCandidates(
+                alwaysp, localAliasesBefore(alwaysp->stmtsp(),
+                                            skipLeadingIgnorableStmt(alwaysp->stmtsp())));
         for (const std::pair<AstIf*, AstNodeExpr*>& cand : ifCandidates) {
             const FsmAliasMap aliases = localAliasesBefore(alwaysp->stmtsp(), cand.first);
             FsmIfChainCandidate chain;
             if (!collectIfChain(cand.first, aliases, chain)) continue;
             AstVarScope* const vscp = chain.compareVscp;
-            if (!ifChainSupportedTransitionNode(chain, vscp)) continue;
+            if (!ifChainSupportedTransitionNode(chain, vscp, vscp)) continue;
             if (!firstCand.stateVscp) {
                 firstCand.warnNodep = cand.first;
                 firstCand.stateVscp = vscp;
@@ -2294,6 +2338,7 @@ class FsmCoverIncBuilder final {
     AstNodeStmt* buildUnxpandedTransitionHandler(const FsmStateVertex* const toStatep) {
         AstCase* const arcCasep = new AstCase{
             m_flp, VCaseType::CT_CASE, new AstVarRef{m_flp, m_prevVscp, VAccess::READ}, nullptr};
+        std::unordered_set<const FsmStateVertex*> handledSources;
         for (const V3GraphEdge& edge : toStatep->inEdges()) {
             const FsmArcEdge* const arcp = edge.as<FsmArcEdge>();
             UASSERT_OBJ(!arcp->isReset(), m_graph.stateVarScopep(),
@@ -2301,7 +2346,8 @@ class FsmCoverIncBuilder final {
             UASSERT_OBJ(!arcp->isDefault(), m_graph.stateVarScopep(),
                         "This function should never be called on a target of a default arc");
             const FsmStateVertex* const fromp = arcp->fromp()->as<FsmStateVertex>();
-            if (fromp != toStatep) {
+            // Different conditions can produce the same state transition.
+            if (fromp != toStatep && handledSources.emplace(fromp).second) {
                 arcCasep->addItemsp(
                     new AstCaseItem{m_flp, makeConst(fromp->value().num().toUQuad()),
                                     buildCoverIncStmtp(fromp->label(), toStatep->label())});

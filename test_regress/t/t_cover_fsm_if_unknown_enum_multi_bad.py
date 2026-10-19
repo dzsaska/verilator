@@ -11,6 +11,12 @@ import vltest_bootstrap
 
 test.scenarios('vlt')
 
-test.lint(verilator_flags2=["--coverage-fsm"], fails=True, expect_filename=test.golden_filename)
+test.lint(verilator_flags2=["--coverage-fsm", "--top-module", "t"],
+          fails=True,
+          expect_filename=test.golden_filename)
+
+test.lint(verilator_flags2=["--coverage-fsm", "--coverage-line", "--top-module", "t_default"],
+          fails=True,
+          expect_filename=test.golden_filename.replace('.out', '_default.out'))
 
 test.passes()

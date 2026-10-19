@@ -1,0 +1,15 @@
+%Warning-COVERIGN: t/t_cover_fsm_if_unknown_enum_multi_bad.v:294:18: Ignoring unsupported: FSM coverage on enum state variable 'state_q': assigned value 7 is not present in the declared enum
+                                                                   : ... note: In instance 't_default.unknown_if_default_u'
+  294 |     else state_d = state_t'(7);
+      |                  ^
+                   ... For warning description see https://verilator.org/warn/COVERIGN?v=latest
+                   ... Use "/* verilator lint_off COVERIGN */" and lint_on around source to disable this message.
+%Warning-COVERIGN: t/t_cover_fsm_if_unknown_enum_multi_bad.v:315:20: Ignoring unsupported: FSM coverage on enum state variable 'state_q': assigned value 7 is not present in the declared enum
+                                                                   : ... note: In instance 't_default.unknown_if_default_else_u'
+  315 |       else state_d = sel ? S0 : state_t'(7);
+      |                    ^
+%Warning-COVERIGN: t/t_cover_fsm_if_unknown_enum_multi_bad.v:314:29: Ignoring unsupported: FSM coverage on enum state variable 'state_q': assigned value 7 is not present in the declared enum
+                                                                   : ... note: In instance 't_default.unknown_if_default_then_u'
+  314 |       if (BAD_THEN) state_d = sel ? state_t'(7) : S0;
+      |                             ^
+%Error: Exiting due to
