@@ -327,6 +327,34 @@ module t_default;
   unknown_if_default_cond unknown_if_default_else_u (.clk, .sel);
 endmodule
 
+module unknown_if_default_multi #(
+    parameter int MODE = 0
+) (
+    input logic clk
+);
+  typedef enum logic [1:0] { S0, S1, S2 } state_t;
+  logic sel;
+  state_t state_q;
+  state_t state_d;
+
+  always_comb begin
+    if (state_q == S0) state_d = S1;
+    else begin
+      // Both remaining enum states use this default, but diagnose it only once.
+      // Keep the conditional assignments as expressions under line coverage.
+      // verilator coverage_off
+      /* verilator lint_off ENUMVALUE */
+      if (MODE == 0) state_d = 2'd3;
+      else if (MODE == 1) state_d = sel ? 2'd3 : S0;
+      else state_d = sel ? S0 : 2'd3;
+      /* verilator lint_on ENUMVALUE */
+      // verilator coverage_on
+    end
+  end
+
+  always_ff @(posedge clk) state_q <= state_d;
+endmodule
+
 module t;
   logic clk;
   unknown_then unknown_then_u (.clk(clk));
@@ -339,4 +367,7 @@ module t;
   unknown_if_then_target unknown_if_then_target_u (.clk(clk));
   unknown_if_else_target unknown_if_else_target_u (.clk(clk));
   unknown_wide_direct unknown_wide_direct_u (.clk(clk));
+  unknown_if_default_multi #(.MODE(0)) unknown_if_default_direct_u (.clk(clk));
+  unknown_if_default_multi #(.MODE(1)) unknown_if_default_then_u (.clk(clk));
+  unknown_if_default_multi #(.MODE(2)) unknown_if_default_else_u (.clk(clk));
 endmodule

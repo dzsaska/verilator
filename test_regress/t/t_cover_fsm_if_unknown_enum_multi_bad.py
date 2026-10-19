@@ -19,4 +19,8 @@ test.lint(verilator_flags2=["--coverage-fsm", "--coverage-line", "--top-module",
           fails=True,
           expect_filename=test.golden_filename.replace('.out', '_default.out'))
 
+test.lint(verilator_flags2=["--coverage-fsm", "--coverage-line", "--top-module", "t"],
+          fails=True,
+          expect_filename=test.golden_filename.replace('.out', '_line.out'))
+
 test.passes()

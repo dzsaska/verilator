@@ -1720,7 +1720,7 @@ class FsmDetectVisitor final : public VNVisitor {
         return false;
     }
 
-    static void emitStmtArcsFrom(FsmGraph& graph, AstNode* stmtsp, AstVarScope* stateVscp,
+    static bool emitStmtArcsFrom(FsmGraph& graph, AstNode* stmtsp, AstVarScope* stateVscp,
                                  const FsmStateSpace& stateSpace, FsmStateValue fromValue,
                                  bool isDefault, bool forceCond) {
         AstNodeAssign* const assp = directStateAssign(stmtsp, stateVscp);
@@ -1728,11 +1728,11 @@ class FsmDetectVisitor final : public VNVisitor {
         FsmStateValue toValue;
         const ConstValueStatus status = constValueStatus(assp->rhsp(), toValue);
         if (status == ConstValueStatus::OK) {
-            if (!validateKnownStateValue(assp, stateSpace, toValue, "target")) return;
+            if (!validateKnownStateValue(assp, stateSpace, toValue, "target")) return false;
             // Preserve the user's guard in coverage by marking this arc
             // conditional even when the branch body is a direct assignment.
             graph.addArc(fromValue, toValue, false, forceCond, isDefault, assp->fileline());
-            return;
+            return true;
         }
 
         FsmStateValue thenValue;
@@ -1741,11 +1741,12 @@ class FsmDetectVisitor final : public VNVisitor {
             = directStateCondConstAssign(stmtsp, stateVscp, thenValue, elseValue);
         UASSERT_OBJ(condAssign, stmtsp,
                     "FSM if-chain branch should be a direct constant transition");
-        if (!validateKnownStateValue(stmtsp, stateSpace, thenValue, "target")) return;
-        if (!validateKnownStateValue(stmtsp, stateSpace, elseValue, "target")) return;
+        if (!validateKnownStateValue(stmtsp, stateSpace, thenValue, "target")) return false;
+        if (!validateKnownStateValue(stmtsp, stateSpace, elseValue, "target")) return false;
         for (const FsmStateValue& branchValue : {thenValue, elseValue}) {
             graph.addArc(fromValue, branchValue, false, true, isDefault, stmtsp->fileline());
         }
+        return true;
     }
 
     static void emitIfChainArcs(FsmGraph& graph, const FsmIfChainCandidate& chain,
@@ -1769,8 +1770,10 @@ class FsmDetectVisitor final : public VNVisitor {
             for (const std::pair<string, FsmStateValue>& state : stateSpace.states) {
                 const auto it = stateHasGuard.find(state.second);
                 if (it != stateHasGuard.end() && !it->second) continue;
-                emitStmtArcsFrom(graph, defaultp, stateVscp, stateSpace, state.second, false,
-                                 it != stateHasGuard.end());
+                if (!emitStmtArcsFrom(graph, defaultp, stateVscp, stateSpace, state.second, false,
+                                      it != stateHasGuard.end())) {
+                    return;
+                }
             }
         }
     }
