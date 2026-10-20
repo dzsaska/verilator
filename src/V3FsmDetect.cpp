@@ -672,18 +672,13 @@ class FsmDetectVisitor final : public VNVisitor {
             // information is metadata, not part of steady-state dispatch.
             if (AstIf* const firstIfp = VN_CAST(stmtsp, If)) {
                 FsmIfChainCandidate chain;
-                // A supported dispatch is one candidate, not a reset wrapper
-                // around another candidate starting at its first else-if.
-                const bool isDispatch = FsmDetectVisitor::collectIfChain(firstIfp, aliases, chain)
-                                        && FsmDetectVisitor::ifChainSupportedTransitionNode(
-                                            chain, chain.compareVscp, chain.compareVscp);
-                if (!isDispatch) {
+                // Only unwrap a reset condition, not a state dispatch (including
+                // aliases) whose unsupported transitions still constrain its else.
+                if (FsmDetectVisitor::isSimpleResetCond(firstIfp->condp())
+                    && !FsmDetectVisitor::collectIfChain(firstIfp, aliases, chain)) {
                     if (AstIf* const chainp = VN_CAST(
                             FsmDetectVisitor::skipLeadingIgnorableStmt(firstIfp->elsesp()), If)) {
-                        candidates.emplace_back(
-                            chainp, FsmDetectVisitor::isSimpleResetCond(firstIfp->condp())
-                                        ? firstIfp->condp()
-                                        : nullptr);
+                        candidates.emplace_back(chainp, firstIfp->condp());
                     }
                 }
             }
